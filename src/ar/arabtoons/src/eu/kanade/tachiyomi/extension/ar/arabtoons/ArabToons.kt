@@ -32,8 +32,6 @@ abstract class ArabToons : KeiSource() {
 
     // ========================= Popular =========================
 
-    // The site renders "browse" client-side, so the most-viewed section of the home page is the
-    // only server-rendered popularity ranking.
     override suspend fun getPopularManga(page: Int): MangasPage {
         val document = client.get(baseUrl).asJsoup()
         val section = document.select("h2, h3")
@@ -55,8 +53,6 @@ abstract class ArabToons : KeiSource() {
 
     // ========================= Search =========================
 
-    // The browse/search results are fetched by client-side JavaScript, so the search runs
-    // over the server-rendered sitemaps (slug based) instead.
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         if (query.isBlank()) return getLatestUpdates(page)
 
@@ -105,7 +101,7 @@ abstract class ArabToons : KeiSource() {
     ): SMangaUpdate {
         val path = manga.url.normalizeMangaUrl()
         val document = client.get(baseUrl + path).asJsoup()
-        return SMangaUpdate(document.toSManga(path), document.parseChapters())
+        return SMangaUpdate(document.toSManga(path), parseAllChapters(document, path))
     }
 
     private fun Document.toSManga(path: String): SManga = SManga.create().apply {
@@ -148,7 +144,30 @@ abstract class ArabToons : KeiSource() {
         else -> SManga.UNKNOWN
     }
 
-    private fun Document.parseChapters(): List<SChapter> = select("li.chapter-item a[href]").map { link ->
+    // ========================= Chapters (All Pages) =========================
+
+    private suspend fun parseAllChapters(document: Document, path: String): List<SChapter> {
+        val allChapters = mutableListOf<SChapter>()
+
+        // Page 1
+        allChapters.addAll(document.parseSingleChapterPage())
+
+        // Find the last page number from pagination links
+        val lastPage = document.select("a[href*=page]")
+            .mapNotNull { it.text().trim().toIntOrNull() }
+            .maxOrNull() ?: 1
+
+        // Fetch remaining pages
+        for (page in 2..lastPage) {
+            val pageUrl = "$baseUrl$path?page=$page"
+            val pageDoc = client.get(pageUrl).asJsoup()
+            allChapters.addAll(pageDoc.parseSingleChapterPage())
+        }
+
+        return allChapters
+    }
+
+    private fun Document.parseSingleChapterPage(): List<SChapter> = select("li.chapter-item a[href]").map { link ->
         SChapter.create().apply {
             url = link.absUrl("href").toHttpUrl().encodedPath
             name = link.selectFirst("p")?.text() ?: url.substringAfterLast('/').decoded()
@@ -159,8 +178,6 @@ abstract class ArabToons : KeiSource() {
 
     // ========================= Pages =========================
 
-    // Only the first page image is rendered into the HTML; the rest come from the page payload,
-    // so every image URL of the chapter is collected straight from the raw response.
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val html = client.get(baseUrl + chapter.url).use { it.body.string() }
             .replace("\\u002F", "/")
@@ -213,7 +230,6 @@ abstract class ArabToons : KeiSource() {
 
     private fun String.parseUrlOrNull(): HttpUrl? = runCatching { toHttpUrl() }.getOrNull()
 
-    // Entries saved by the old WordPress version were stored as "/manga/slug/".
     private fun String.normalizeMangaUrl(): String = "/manga/" + trim('/').removePrefix("manga/").substringBefore('/')
 
     private fun String.slug(): String = trim('/').substringAfter("manga/").substringBefore('/')
