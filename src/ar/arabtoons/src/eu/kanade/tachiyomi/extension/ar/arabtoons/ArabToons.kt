@@ -180,18 +180,37 @@ abstract class ArabToons : KeiSource() {
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val html = client.get(baseUrl + chapter.url).use { it.body.string() }
-            .replace("\\u002F", "/")
-            .replace("\\/", "/")
 
-        val images = IMAGE_REGEX.findAll(html)
-            .map { it.value.let { value -> if (value.startsWith("http")) value else baseUrl + value } }
-            .distinct()
-            .toList()
+        // استخراج JSON من الصفحة
+        val jsonRegex = Regex(
+            """<script type="application/json" data-nuxt-data="nuxt-app"[^>]*>(.*?)</script>""",
+            RegexOption.DOT_MATCHES_ALL,
+        )
+        val jsonMatch = jsonRegex.find(html)
+            ?: throw Exception("لم يتم العثور على JSON")
 
-        val pages = images.groupBy { it.substringBeforeLast('/') }.values.maxByOrNull { it.size }
-            ?: throw Exception("لم يتم العثور على صور الفصل")
+        val jsonText = jsonMatch.groupValues[1]
 
-        return pages.mapIndexed { index, url -> Page(index, imageUrl = url) }
+        // استخراج mangaDir و chapterDir و images
+        val mangaDirRegex = Regex(""""mangaDir":"([^"]+)"""")
+        val chapterDirRegex = Regex(""""chapterDir":"([^"]+)"""")
+        val imagesRegex = Regex(""""name":"([^"]+\.(?:webp|jpe?g|png|avif))"""")
+
+        val mangaDir = mangaDirRegex.find(jsonText)?.groupValues?.get(1)
+            ?: throw Exception("لم يتم العثور على mangaDir")
+        val chapterDir = chapterDirRegex.find(jsonText)?.groupValues?.get(1)
+            ?: throw Exception("لم يتم العثور على chapterDir")
+
+        val imageNames = imagesRegex.findAll(jsonText).map { it.groupValues[1] }.toList()
+
+        if (imageNames.isEmpty()) throw Exception("لم يتم العثور على صور الفصل")
+
+        return imageNames.mapIndexed { index, imageName ->
+            Page(
+                index = index,
+                imageUrl = "$baseUrl/storage/mangas/$mangaDir/$chapterDir/$imageName",
+            )
+        }
     }
 
     // ========================= Utilities =========================
@@ -268,7 +287,6 @@ abstract class ArabToons : KeiSource() {
         private val NUMBER_REGEX = Regex("""\d+(\.\d+)?""")
         private val NON_WORD_REGEX = Regex("""[^\p{L}\p{N}\s]""")
         private val SPACES_REGEX = Regex("""\s+""")
-        private val IMAGE_REGEX = Regex("""(?:https://arabtoons\.net)?/storage/mangas/[^"'\s\\<>)]+?\.(?:webp|jpe?g|png|avif)""")
         private val RELATIVE_DATE_REGEX = Regex("""منذ\s*(\d+)?\s*([^\s\d]+)""")
     }
-}
+                                }
